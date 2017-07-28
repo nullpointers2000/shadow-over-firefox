@@ -1,1 +1,1 @@
-# shadow-over-firefox
+http://phrack.org/issues/69/14.html
